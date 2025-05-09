@@ -8,6 +8,6 @@ public class WebViewController {
 
     @GetMapping("/")
     public String home() {
-        return "appointment"; // busca appointment.html en templates
+        return "appointment";
     }
 }

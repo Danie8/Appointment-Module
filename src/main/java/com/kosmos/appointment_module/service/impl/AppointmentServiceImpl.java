@@ -10,6 +10,7 @@ import com.kosmos.appointment_module.util.Mappers;
 import jakarta.transaction.Transactional;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -87,11 +88,12 @@ public class AppointmentServiceImpl implements AppointmentService {
     }
 
     private void validateAppointment(Appointment appointment) {
-        LocalDateTime appointmentTime = appointment.getAppointmentTime();
-        LocalDate date = appointmentTime.toLocalDate();
+        LocalDate date = appointment.getAppointmentTime().toLocalDate();
         LocalDateTime startOfDay = date.atStartOfDay();
         LocalDateTime endOfDay = date.atTime(LocalTime.MAX);
+        LocalDateTime appointmentTime = appointment.getAppointmentTime();
 
+        // Validar máximo 8 citas por doctor ese día
         var doctorAppointments = appointmentRepository.findByDoctorIdAndAppointmentTimeBetween(
                 appointment.getDoctor().getId(), startOfDay, endOfDay);
 
@@ -99,23 +101,30 @@ public class AppointmentServiceImpl implements AppointmentService {
             throw new BusinessException("El doctor ya tiene 8 citas asignadas ese día.");
         }
 
-        if (doctorAppointments.stream().anyMatch(a -> a.getAppointmentTime().equals(appointmentTime))) {
+        if (doctorAppointments.stream().anyMatch(a ->
+                a.getAppointmentTime().equals(appointmentTime))) {
             throw new BusinessException("El doctor ya tiene una cita a esa hora.");
         }
 
+        // Validar conflicto de horario con consultorio
         var roomAppointments = appointmentRepository.findByConsultingRoomIdAndAppointmentTimeBetween(
                 appointment.getConsultingRoom().getId(), startOfDay, endOfDay);
 
-        if (roomAppointments.stream().anyMatch(a -> a.getAppointmentTime().equals(appointmentTime))) {
+        if (roomAppointments.stream().anyMatch(a ->
+                a.getAppointmentTime().equals(appointmentTime))) {
             throw new BusinessException("El consultorio ya está ocupado a esa hora.");
         }
 
+        // Validar que el paciente no tenga citas con menos de 2 horas de diferencia
         var patientAppointments = appointmentRepository.findByPatientNameIgnoreCaseAndAppointmentTimeBetween(
                 appointment.getPatientName(), startOfDay, endOfDay);
 
-        if (patientAppointments.stream().anyMatch(a ->
-                Math.abs(a.getAppointmentTime().until(appointmentTime, java.time.temporal.ChronoUnit.MINUTES)) < 120)) {
+        if (patientAppointments.stream().anyMatch(a -> {
+            long minutes = Math.abs(Duration.between(a.getAppointmentTime(), appointmentTime).toMinutes());
+            return minutes < 120;
+        })) {
             throw new BusinessException("El paciente ya tiene una cita con menos de 2 horas de diferencia.");
         }
     }
+
 }
