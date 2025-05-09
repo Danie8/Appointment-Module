@@ -14,8 +14,8 @@ import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
-import java.util.List;
 import java.util.Comparator;
+import java.util.List;
 
 @Service
 public class AppointmentServiceImpl implements AppointmentService {
@@ -34,19 +34,10 @@ public class AppointmentServiceImpl implements AppointmentService {
     }
 
     @Override
-    public List<AppointmentDTO> findAll() {
-        return appointmentRepository.findAll().stream()
-                .map(Mappers::toDTO)
-                .sorted(Comparator.comparing(AppointmentDTO::getAppointmentTime))
-                .toList();
-    }
-
-    @Override
     public Appointment update(Long id, Appointment appointment) {
         if (!appointmentRepository.existsById(id)) {
             throw new NotFoundException("Cita", id);
         }
-
         appointment.setId(id);
         validateAppointment(appointment);
         return appointmentRepository.save(appointment);
@@ -61,11 +52,20 @@ public class AppointmentServiceImpl implements AppointmentService {
     }
 
     @Override
+    public List<AppointmentDTO> findAll() {
+        return appointmentRepository.findAll().stream()
+                .map(Mappers::toDTO)
+                .sorted(Comparator.comparing(AppointmentDTO::getAppointmentTime))
+                .toList();
+    }
+
+    @Override
     public List<AppointmentDTO> findByDate(LocalDate date) {
         return appointmentRepository
                 .findByAppointmentTimeBetween(date.atStartOfDay(), date.atTime(LocalTime.MAX))
                 .stream()
                 .map(Mappers::toDTO)
+                .sorted(Comparator.comparing(AppointmentDTO::getAppointmentTime))
                 .toList();
     }
 
@@ -75,6 +75,7 @@ public class AppointmentServiceImpl implements AppointmentService {
                 .findByDoctorIdAndAppointmentTimeBetween(doctorId, date.atStartOfDay(), date.atTime(LocalTime.MAX))
                 .stream()
                 .map(Mappers::toDTO)
+                .sorted(Comparator.comparing(AppointmentDTO::getAppointmentTime))
                 .toList();
     }
 
@@ -84,44 +85,44 @@ public class AppointmentServiceImpl implements AppointmentService {
                 .findByConsultingRoomIdAndAppointmentTimeBetween(roomId, date.atStartOfDay(), date.atTime(LocalTime.MAX))
                 .stream()
                 .map(Mappers::toDTO)
+                .sorted(Comparator.comparing(AppointmentDTO::getAppointmentTime))
                 .toList();
     }
 
     private void validateAppointment(Appointment appointment) {
-        LocalDate date = appointment.getAppointmentTime().toLocalDate();
-        LocalDateTime startOfDay = date.atStartOfDay();
-        LocalDateTime endOfDay = date.atTime(LocalTime.MAX);
-        LocalDateTime appointmentTime = appointment.getAppointmentTime();
+        LocalDateTime time = appointment.getAppointmentTime();
+        LocalDateTime startOfDay = time.toLocalDate().atStartOfDay();
+        LocalDateTime endOfDay = time.toLocalDate().atTime(LocalTime.MAX);
 
-        // Validar máximo 8 citas por doctor ese día
         var doctorAppointments = appointmentRepository.findByDoctorIdAndAppointmentTimeBetween(
                 appointment.getDoctor().getId(), startOfDay, endOfDay);
+        var roomAppointments = appointmentRepository.findByConsultingRoomIdAndAppointmentTimeBetween(
+                appointment.getConsultingRoom().getId(), startOfDay, endOfDay);
+        var patientAppointments = appointmentRepository.findByPatientNameIgnoreCaseAndAppointmentTimeBetween(
+                appointment.getPatientName(), startOfDay, endOfDay);
 
-        if (doctorAppointments.size() >= 8) {
+        Long appointmentId = appointment.getId(); // puede ser null si es create()
+
+        if (doctorAppointments.size() >= 8 &&
+                doctorAppointments.stream().noneMatch(a -> a.getId() != null && a.getId().equals(appointmentId))) {
             throw new BusinessException("El doctor ya tiene 8 citas asignadas ese día.");
         }
 
         if (doctorAppointments.stream().anyMatch(a ->
-                a.getAppointmentTime().equals(appointmentTime))) {
+                a.getAppointmentTime().equals(time) &&
+                        (a.getId() == null || !a.getId().equals(appointmentId)))) {
             throw new BusinessException("El doctor ya tiene una cita a esa hora.");
         }
 
-        // Validar conflicto de horario con consultorio
-        var roomAppointments = appointmentRepository.findByConsultingRoomIdAndAppointmentTimeBetween(
-                appointment.getConsultingRoom().getId(), startOfDay, endOfDay);
-
         if (roomAppointments.stream().anyMatch(a ->
-                a.getAppointmentTime().equals(appointmentTime))) {
+                a.getAppointmentTime().equals(time) &&
+                        (a.getId() == null || !a.getId().equals(appointmentId)))) {
             throw new BusinessException("El consultorio ya está ocupado a esa hora.");
         }
 
-        // Validar que el paciente no tenga citas con menos de 2 horas de diferencia
-        var patientAppointments = appointmentRepository.findByPatientNameIgnoreCaseAndAppointmentTimeBetween(
-                appointment.getPatientName(), startOfDay, endOfDay);
-
         if (patientAppointments.stream().anyMatch(a -> {
-            long minutes = Math.abs(Duration.between(a.getAppointmentTime(), appointmentTime).toMinutes());
-            return minutes < 120;
+            long minutes = Math.abs(Duration.between(a.getAppointmentTime(), time).toMinutes());
+            return minutes < 120 && (a.getId() == null || !a.getId().equals(appointmentId));
         })) {
             throw new BusinessException("El paciente ya tiene una cita con menos de 2 horas de diferencia.");
         }
