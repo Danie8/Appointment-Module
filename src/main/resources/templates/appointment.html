@@ -25,12 +25,22 @@
 <h1>Gestión de citas médicas</h1>
 
 <form id="appointmentForm">
-    <h3>Registrar nueva cita</h3>
-    <label>Paciente:<input name="patientName" required></label>
-    <label>Fecha y hora:<input type="datetime-local" name="appointmentTime" required></label>
+    <h3>Registrar / Editar cita</h3>
+    <input type="hidden" name="id" id="appointmentId">
+    <label>Paciente:<input name="patientName" id="patientName" required></label>
+    <label>Fecha y hora:<input type="datetime-local" name="appointmentTime" id="appointmentTime" required></label>
     <label>Doctor:<select name="doctorId" id="doctorSelect" required></select></label>
     <label>Consultorio:<select name="consultingRoomId" id="roomSelect" required></select></label>
-    <button type="submit" class="btn">Registrar cita</button>
+    <button type="submit" class="btn">Guardar</button>
+</form>
+
+<form id="filterForm" style="margin-top: 30px;">
+    <h3>Filtrar citas</h3>
+    <label>Por fecha:<input type="date" id="filterDate"></label>
+    <label>Por doctor:<select id="filterDoctor"></select></label>
+    <label>Por consultorio:<select id="filterRoom"></select></label>
+    <button type="button" class="btn" onclick="applyFilters()">Filtrar</button>
+    <button type="button" class="btn btn-warning" onclick="clearFilters()">Limpiar</button>
 </form>
 
 <div id="msg" class="msg" style="display:none;"></div>
@@ -62,7 +72,7 @@
     <label>Apellido paterno:<input id="lastName" required></label>
     <label>Apellido materno:<input id="middleName"></label>
     <label>Especialidad:<input id="specialty" required></label>
-    <button type="submit" class="btn">Registrar / Actualizar doctor</button>
+    <button type="submit" class="btn">Guardar doctor</button>
 </form>
 <table>
     <thead><tr><th>Nombre</th><th>Especialidad</th><th>Acciones</th></tr></thead>
@@ -74,7 +84,7 @@
     <input type="hidden" id="roomId">
     <label>Número:<input id="roomNumber" required></label>
     <label>Piso:<input id="floor" required></label>
-    <button type="submit" class="btn">Registrar / Actualizar consultorio</button>
+    <button type="submit" class="btn">Guardar consultorio</button>
 </form>
 <table>
     <thead><tr><th>Sala</th><th>Piso</th><th>Acciones</th></tr></thead>
@@ -82,14 +92,15 @@
 </table>
 
 <script>
+    let appointments = [], currentPage = 1, pageSize = 10;
+
     const msg = document.getElementById('msg');
+    const appointmentTable = document.getElementById('appointmentsTable');
+    const pageInfo = document.getElementById('pageInfo');
     const doctorSelect = document.getElementById('doctorSelect');
     const roomSelect = document.getElementById('roomSelect');
-    const appointmentTable = document.getElementById('appointmentsTable');
-    const doctorList = document.getElementById('doctorList');
-    const roomList = document.getElementById('roomList');
-    const pageInfo = document.getElementById('pageInfo');
-    let appointments = [], currentPage = 1, pageSize = 10;
+    const filterDoctor = document.getElementById('filterDoctor');
+    const filterRoom = document.getElementById('filterRoom');
 
     async function loadAll() {
       const [doctors, rooms, appts] = await Promise.all([
@@ -97,75 +108,76 @@
         fetch('/api/rooms').then(r => r.json()),
         fetch('/api/appointments').then(r => r.json())
       ]);
-      updateSelects(doctors, rooms);
       renderDoctors(doctors);
       renderRooms(rooms);
-      appointments = appts.sort((a, b) => new Date(a.appointmentTime) - new Date(b.appointmentTime));
-      renderAppointments();
+      renderAppointments(appts);
     }
 
-    function updateSelects(doctors, rooms) {
-      doctorSelect.innerHTML = doctors.map(d =>
-        `<option value="${d.id}">${d.firstName} ${d.lastName} (${d.specialty})</option>`
-      ).join('');
-      roomSelect.innerHTML = rooms.map(r =>
-        `<option value="${r.id}">Sala ${r.roomNumber} - Piso ${r.floor}</option>`
-      ).join('');
+    function renderDoctors(list) {
+      const html = list.map(d => `<option value="${d.id}">${d.firstName} ${d.lastName}</option>`).join('');
+      doctorSelect.innerHTML = html;
+      filterDoctor.innerHTML = `<option value="">Todos</option>` + html;
+      document.getElementById('doctorList').innerHTML = list.map(d => `
+        <tr><td>${d.firstName} ${d.lastName}</td><td>${d.specialty}</td>
+        <td>
+          <button class="btn btn-warning" onclick="editDoctor(${d.id}, '${d.firstName}', '${d.lastName}', '${d.middleName}', '${d.specialty}')">Editar</button>
+          <button class="btn btn-danger" onclick="deleteItem('/api/doctors/${d.id}')">Eliminar</button>
+        </td></tr>`).join('');
     }
 
-    function renderAppointments() {
+    function renderRooms(list) {
+      const html = list.map(r => `<option value="${r.id}">Sala ${r.roomNumber} - Piso ${r.floor}</option>`).join('');
+      roomSelect.innerHTML = html;
+      filterRoom.innerHTML = `<option value="">Todos</option>` + html;
+      document.getElementById('roomList').innerHTML = list.map(r => `
+        <tr><td>${r.roomNumber}</td><td>${r.floor}</td>
+        <td>
+          <button class="btn btn-warning" onclick="editRoom(${r.id}, ${r.roomNumber}, ${r.floor})">Editar</button>
+          <button class="btn btn-danger" onclick="deleteItem('/api/rooms/${r.id}')">Eliminar</button>
+        </td></tr>`).join('');
+    }
+
+    function renderAppointments(list) {
+      appointments = list.sort((a, b) => new Date(a.appointmentTime) - new Date(b.appointmentTime));
       const start = (currentPage - 1) * pageSize;
       const page = appointments.slice(start, start + pageSize);
       appointmentTable.innerHTML = page.map(a => `
-        <tr>
-          <td>${a.patientName}</td>
-          <td>${a.appointmentTime.replace('T', ' ')}</td>
-          <td>${a.doctorFirstName} ${a.doctorLastName}</td>
-          <td>${a.doctorSpecialty}</td>
-          <td>Sala ${a.roomNumber} - Piso ${a.floor}</td>
-          <td><button class="btn btn-danger" onclick="cancel(${a.id})">Cancelar</button></td>
-        </tr>`).join('');
+        <tr><td>${a.patientName}</td><td>${a.appointmentTime.replace('T', ' ')}</td>
+        <td>${a.doctorFirstName} ${a.doctorLastName}</td><td>${a.doctorSpecialty}</td>
+        <td>Sala ${a.roomNumber} - Piso ${a.floor}</td>
+        <td>
+          <button class="btn btn-warning" onclick="editAppointment(${a.id})">Editar</button>
+          <button class="btn btn-danger" onclick="cancel(${a.id})">Cancelar</button>
+        </td></tr>`).join('');
       pageInfo.textContent = `Página ${currentPage} de ${Math.ceil(appointments.length / pageSize)}`;
     }
 
-    function prevPage() { if (currentPage > 1) { currentPage--; renderAppointments(); } }
-    function nextPage() { if ((currentPage * pageSize) < appointments.length) { currentPage++; renderAppointments(); } }
-
-    async function cancel(id) {
-      if (!confirm('¿Cancelar cita?')) return;
-      await fetch(`/api/appointments/${id}`, { method: 'DELETE' });
-      showMsg('Cita cancelada', true);
-      await loadAll();
-    }
-
-    function renderDoctors(data) {
-      doctorList.innerHTML = data.map(d => `
-        <tr>
-          <td>${d.firstName} ${d.lastName}</td>
-          <td>${d.specialty}</td>
-          <td>
-            <button class="btn btn-warning" onclick="editDoctor(${d.id}, '${d.firstName}', '${d.lastName}', '${d.middleName}', '${d.specialty}')">Editar</button>
-            <button class="btn btn-danger" onclick="deleteDoctor(${d.id})">Eliminar</button>
-          </td>
-        </tr>`).join('');
-    }
-
-    function renderRooms(data) {
-      roomList.innerHTML = data.map(r => `
-        <tr>
-          <td>${r.roomNumber}</td>
-          <td>${r.floor}</td>
-          <td>
-            <button class="btn btn-warning" onclick="editRoom(${r.id}, ${r.roomNumber}, ${r.floor})">Editar</button>
-            <button class="btn btn-danger" onclick="deleteRoom(${r.id})">Eliminar</button>
-          </td>
-        </tr>`).join('');
-    }
+    function prevPage() { if (currentPage > 1) { currentPage--; renderAppointments(appointments); } }
+    function nextPage() { if (currentPage * pageSize < appointments.length) { currentPage++; renderAppointments(appointments); } }
 
     function showMsg(text, ok = true) {
       msg.textContent = text;
       msg.className = 'msg ' + (ok ? 'ok' : 'error');
       msg.style.display = 'block';
+    }
+
+    async function cancel(id) {
+      if (confirm("¿Cancelar esta cita?")) {
+        await fetch(`/api/appointments/${id}`, { method: 'DELETE' });
+        await loadAll();
+        showMsg("Cita cancelada.");
+      }
+    }
+
+    function editAppointment(id) {
+      const a = appointments.find(x => x.id === id);
+      if (a) {
+        document.getElementById('appointmentId').value = a.id;
+        document.getElementById('patientName').value = a.patientName;
+        document.getElementById('appointmentTime').value = a.appointmentTime;
+        doctorSelect.value = a.doctorId;
+        roomSelect.value = a.roomId;
+      }
     }
 
     function editDoctor(id, first, last, middle, spec) {
@@ -182,64 +194,80 @@
       roomForm.floor.value = floor;
     }
 
-    async function deleteDoctor(id) {
-      if (confirm('¿Eliminar doctor?')) {
-        await fetch(`/api/doctors/${id}`, { method: 'DELETE' });
+    async function deleteItem(url) {
+      if (confirm("¿Eliminar este elemento?")) {
+        await fetch(url, { method: 'DELETE' });
         await loadAll();
       }
     }
 
-    async function deleteRoom(id) {
-      if (confirm('¿Eliminar consultorio?')) {
-        await fetch(`/api/rooms/${id}`, { method: 'DELETE' });
-        await loadAll();
+    async function applyFilters() {
+      let url = '/api/appointments';
+      const date = filterDate.value;
+      const doctor = filterDoctor.value;
+      const room = filterRoom.value;
+      if (doctor && date) {
+        url = `/api/appointments/by-doctor?doctorId=${doctor}&date=${date}`;
+      } else if (room && date) {
+        url = `/api/appointments/by-room?roomId=${room}&date=${date}`;
+      } else if (date) {
+        url = `/api/appointments/by-date?date=${date}`;
       }
+      const res = await fetch(url);
+      const filtered = await res.json();
+      currentPage = 1;
+      renderAppointments(filtered);
     }
 
-    document.getElementById('appointmentForm').addEventListener('submit', async e => {
+    function clearFilters() {
+      filterDate.value = '';
+      filterDoctor.value = '';
+      filterRoom.value = '';
+      loadAll();
+    }
+
+    appointmentForm.addEventListener('submit', async e => {
       e.preventDefault();
       const data = Object.fromEntries(new FormData(e.target));
+      const id = data.id;
       data.doctorId = parseInt(data.doctorId);
       data.consultingRoomId = parseInt(data.consultingRoomId);
-      const res = await fetch('/api/appointments', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
+      const method = id ? 'PUT' : 'POST';
+      const url = id ? `/api/appointments/${id}` : '/api/appointments';
+      const res = await fetch(url, {
+        method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
       });
-      showMsg(res.ok ? '✅ Cita registrada' : '❌ Error al registrar', res.ok);
+      const result = await res.json();
+      showMsg(res.ok ? '✅ Cita guardada' : '❌ ' + (result.message || 'Error'), res.ok);
       if (res.ok) { e.target.reset(); await loadAll(); }
     });
 
-    document.getElementById('doctorForm').addEventListener('submit', async e => {
+    doctorForm.addEventListener('submit', async e => {
       e.preventDefault();
-      const id = e.target.doctorId.value;
+      const id = doctorForm.doctorId.value;
       const body = {
-        firstName: e.target.firstName.value,
-        lastName: e.target.lastName.value,
-        middleName: e.target.middleName.value,
-        specialty: e.target.specialty.value
+        firstName: firstName.value,
+        lastName: lastName.value,
+        middleName: middleName.value,
+        specialty: specialty.value
       };
+      const method = id ? 'PUT' : 'POST';
       const url = id ? `/api/doctors/${id}` : '/api/doctors';
-      await fetch(url, {
-        method: id ? 'PUT' : 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      });
+      await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       e.target.reset();
       await loadAll();
     });
 
-    document.getElementById('roomForm').addEventListener('submit', async e => {
+    roomForm.addEventListener('submit', async e => {
       e.preventDefault();
-      const id = e.target.roomId.value;
+      const id = roomForm.roomId.value;
       const body = {
-        roomNumber: parseInt(e.target.roomNumber.value),
-        floor: parseInt(e.target.floor.value)
+        roomNumber: parseInt(roomNumber.value),
+        floor: parseInt(floor.value)
       };
+      const method = id ? 'PUT' : 'POST';
       const url = id ? `/api/rooms/${id}` : '/api/rooms';
-      await fetch(url, {
-        method: id ? 'PUT' : 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      });
+      await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       e.target.reset();
       await loadAll();
     });
