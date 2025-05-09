@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="es" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title>Registrar cita</title>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; padding: 20px; max-width: 1000px; margin: auto; background: #f8f9fa; }
+        h1, h2, h3 { color: #2c3e50; text-align: center; }
+        form { background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); margin-bottom: 30px; }
+        label { font-weight: bold; margin-top: 10px; display: block; }
+        input, select, button { padding: 8px; font-size: 1rem; margin-top: 5px; width: 100%; box-sizing: border-box; }
+        button { background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background-color: #0056b3; }
+        .msg { margin-top: 10px; padding: 10px; border-radius: 5px; }
+        .ok { background-color: #e0f7e9; }
+        .error { background-color: #fbeaea; color: #a00; }
+        table { width: 100%; border-collapse: collapse; margin-top: 30px; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 0 8px rgba(0,0,0,0.05); }
+        th, td { padding: 12px; border-bottom: 1px solid #ddd; text-align: left; }
+        th { background-color: #007bff; color: white; }
+        tr:last-child td { border-bottom: none; }
+        .cancel-btn { background-color: #dc3545; color: white; padding: 6px 12px; border: none; border-radius: 4px; cursor: pointer; }
+        .cancel-btn:hover { background-color: #c82333; }
+        .pagination { text-align: center; margin-top: 20px; }
+        .pagination button { margin: 0 5px; padding: 6px 12px; }
+        .edit-btn { background-color: #ffc107; color: black; margin-left: 10px; }
+    </style>
+</head>
+<body>
+<h1>Formulario de cita médica</h1>
+
+<form id="appointmentForm">
+    <label>Paciente:<input name="patientName" required></label>
+    <label>Fecha y hora:<input type="datetime-local" name="appointmentTime" required></label>
+    <label>Doctor:<select name="doctorId" id="doctorSelect" required></select></label>
+    <label>Consultorio:<select name="consultingRoomId" id="roomSelect" required></select></label>
+    <button type="submit">Registrar</button>
+</form>
+
+<div id="msg" class="msg" style="display:none;"></div>
+
+<h2>Listado de citas</h2>
+<table id="appointmentsTable">
+    <thead>
+    <tr>
+        <th>Paciente</th>
+        <th>Hora</th>
+        <th>Doctor</th>
+        <th>Especialidad</th>
+        <th>Consultorio</th>
+        <th>Acciones</th>
+    </tr>
+    </thead>
+    <tbody></tbody>
+</table>
+<div class="pagination">
+    <button onclick="prevPage()">Anterior</button>
+    <span id="pageInfo"></span>
+    <button onclick="nextPage()">Siguiente</button>
+</div>
+
+<h3>Gestión de consultorios</h3>
+<form onsubmit="registerRoom(event)">
+    <label>Número:<input id="roomNumber" required></label>
+    <label>Piso:<input id="floor" required></label>
+    <input type="hidden" id="roomId">
+    <button type="submit">Registrar o actualizar</button>
+</form>
+<ul id="roomList"></ul>
+
+<h3>Gestión de doctores</h3>
+<form onsubmit="registerDoctor(event)">
+    <label>Nombre:<input id="firstName" required></label>
+    <label>Apellido paterno:<input id="lastName" required></label>
+    <label>Apellido materno:<input id="middleName"></label>
+    <label>Especialidad:<input id="specialty" required></label>
+    <input type="hidden" id="doctorId">
+    <button type="submit">Registrar o actualizar</button>
+</form>
+<ul id="doctorList"></ul>
+
+<script>
+    const form = document.getElementById('appointmentForm');
+    const msg = document.getElementById('msg');
+    const doctorSelect = document.getElementById('doctorSelect');
+    const roomSelect = document.getElementById('roomSelect');
+    const tableBody = document.querySelector('#appointmentsTable tbody');
+    const pageInfo = document.getElementById('pageInfo');
+
+    let appointments = [];
+    let currentPage = 1;
+    const pageSize = 10;
+
+    async function loadOptions() {
+      const [doctorsRes, roomsRes] = await Promise.all([
+        fetch('/api/doctors'),
+        fetch('/api/rooms')
+      ]);
+      const doctors = await doctorsRes.json();
+      const rooms = await roomsRes.json();
+
+      doctorSelect.innerHTML = doctors.map(d =>
+        `<option value="${d.id}">${d.firstName} ${d.lastName} (${d.specialty})</option>`
+      ).join('');
+      roomSelect.innerHTML = rooms.map(r =>
+        `<option value="${r.id}">Sala ${r.roomNumber} - Piso ${r.floor}</option>`
+      ).join('');
+      renderDoctorList(doctors);
+      renderRoomList(rooms);
+    }
+
+    function renderDoctorList(doctors) {
+      const ul = document.getElementById('doctorList');
+      ul.innerHTML = doctors.map(d =>
+        `<li>
+          ${d.firstName} ${d.lastName} (${d.specialty})
+          <button class="edit-btn" onclick="editDoctor(${d.id}, '${d.firstName}', '${d.lastName}', '${d.middleName || ''}', '${d.specialty}')">Editar</button>
+          <button onclick="deleteDoctor(${d.id})">Eliminar</button>
+        </li>`
+      ).join('');
+    }
+
+    function renderRoomList(rooms) {
+      const ul = document.getElementById('roomList');
+      ul.innerHTML = rooms.map(r =>
+        `<li>
+          Sala ${r.roomNumber} - Piso ${r.floor}
+          <button class="edit-btn" onclick="editRoom(${r.id}, ${r.roomNumber}, ${r.floor})">Editar</button>
+          <button onclick="deleteRoom(${r.id})">Eliminar</button>
+        </li>`
+      ).join('');
+    }
+
+    async function loadAppointments() {
+      const res = await fetch('/api/appointments/by-date?date=2000-01-01');
+      const allAppointments = await res.json();
+      appointments = allAppointments.sort((a, b) => new Date(a.appointmentTime) - new Date(b.appointmentTime));
+      renderPage();
+    }
+
+    function renderPage() {
+      const start = (currentPage - 1) * pageSize;
+      const paged = appointments.slice(start, start + pageSize);
+      tableBody.innerHTML = paged.map(a => `
+        <tr>
+          <td>${a.patientName}</td>
+          <td>${a.appointmentTime.replace('T', ' ')}</td>
+          <td>${a.doctorFirstName} ${a.doctorLastName}</td>
+          <td>${a.doctorSpecialty}</td>
+          <td>Sala ${a.roomNumber} - Piso ${a.floor}</td>
+          <td><button class="cancel-btn" onclick="cancelAppointment(${a.id})">Cancelar</button></td>
+        </tr>
+      `).join('');
+      const totalPages = Math.ceil(appointments.length / pageSize);
+      pageInfo.textContent = `Página ${currentPage} de ${totalPages}`;
+    }
+
+    function prevPage() {
+      if (currentPage > 1) { currentPage--; renderPage(); }
+    }
+
+    function nextPage() {
+      const totalPages = Math.ceil(appointments.length / pageSize);
+      if (currentPage < totalPages) { currentPage++; renderPage(); }
+    }
+
+    async function cancelAppointment(id) {
+      if (!confirm('¿Cancelar esta cita?')) return;
+      const res = await fetch(`/api/appointments/${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        showMsg('🗑️ Cita cancelada correctamente', true);
+        await loadAppointments();
+      } else {
+        showMsg('❌ Error al cancelar la cita', false);
+      }
+    }
+
+    function showMsg(text, success = true) {
+      msg.className = 'msg ' + (success ? 'ok' : 'error');
+      msg.textContent = text;
+      msg.style.display = 'block';
+    }
+
+    function editDoctor(id, first, last, middle, spec) {
+      document.getElementById('doctorId').value = id;
+      document.getElementById('firstName').value = first;
+      document.getElementById('lastName').value = last;
+      document.getElementById('middleName').value = middle;
+      document.getElementById('specialty').value = spec;
+    }
+
+    function editRoom(id, number, floor) {
+      document.getElementById('roomId').value = id;
+      document.getElementById('roomNumber').value = number;
+      document.getElementById('floor').value = floor;
+    }
+
+    async function deleteDoctor(id) {
+      if (!confirm('¿Eliminar este doctor?')) return;
+      await fetch(`/api/doctors/${id}`, { method: 'DELETE' });
+      await loadOptions();
+    }
+
+    async function deleteRoom(id) {
+      if (!confirm('¿Eliminar este consultorio?')) return;
+      await fetch(`/api/rooms/${id}`, { method: 'DELETE' });
+      await loadOptions();
+    }
+
+    async function registerDoctor(e) {
+      e.preventDefault();
+      const id = document.getElementById('doctorId').value;
+      const body = {
+        firstName: document.getElementById('firstName').value,
+        lastName: document.getElementById('lastName').value,
+        middleName: document.getElementById('middleName').value,
+        specialty: document.getElementById('specialty').value
+      };
+      const method = id ? 'PUT' : 'POST';
+      const url = id ? `/api/doctors/${id}` : '/api/doctors';
+      await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      document.getElementById('doctorId').value = '';
+      await loadOptions();
+    }
+
+    async function registerRoom(e) {
+      e.preventDefault();
+      const id = document.getElementById('roomId').value;
+      const body = {
+        roomNumber: parseInt(document.getElementById('roomNumber').value),
+        floor: parseInt(document.getElementById('floor').value)
+      };
+      const method = id ? 'PUT' : 'POST';
+      const url = id ? `/api/rooms/${id}` : '/api/rooms';
+      await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      document.getElementById('roomId').value = '';
+      await loadOptions();
+    }
+
+    form.addEventListener('submit', async e => {
+      e.preventDefault();
+      msg.style.display = 'none';
+
+      const data = Object.fromEntries(new FormData(form));
+      data.doctorId = parseInt(data.doctorId);
+      data.consultingRoomId = parseInt(data.consultingRoomId);
+
+      const response = await fetch('/api/appointments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+
+      const result = await response.json();
+      showMsg(response.ok
+        ? '✅ Cita registrada con ID: ' + result.id
+        : '❌ ' + (result.message || 'Error inesperado'), response.ok);
+      if (response.ok) {
+        form.reset();
+        await loadAppointments();
+      }
+    });
+
+    loadOptions();
+    loadAppointments();
+</script>
+</body>
+</html>
